@@ -3,60 +3,42 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.schemas import TextModerationRequest, ImageModerationRequest, ModerationResponse
 from app.database import get_db
 from app import models
-import hashlib, logging, os, httpx, json
+import hashlib, logging, json
 from datetime import datetime
 
 router = APIRouter()
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-SLACK_WEBHOOK_URL = os.getenv("SLACK_WEBHOOK_URL")
-EMAIL_API_KEY = os.getenv("EMAIL_API_KEY")  # For Brevo or SMTP
+SLACK_WEBHOOK_URL = None  # You can keep None if you don’t want Slack notifications
+EMAIL_API_KEY = None  # Keep None if email notifications not needed
 
+# --- MOCK LLM function ---
 async def call_openai_moderation(text: str):
-    # Example OpenAI GPT-4 moderation call
-    url = "https://api.openai.com/v1/chat/completions"
-    headers = {"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"}
-    data = {
-        "model": "gpt-4",
-        "messages": [
-            {"role": "system", "content": "Classify the following text as toxic, spam, harassment, or safe."},
-            {"role": "user", "content": text}
-        ]
+    """
+    Mock AI moderation: Classifies text as 'safe' or 'toxic' based on simple keyword.
+    """
+    if any(word in text.lower() for word in ["bad", "hate", "spam", "abuse"]):
+        classification = "toxic"
+        reasoning = "Detected inappropriate content."
+    else:
+        classification = "safe"
+        reasoning = "No inappropriate content detected."
+    return {
+        "classification": classification,
+        "confidence": 0.95,
+        "reasoning": reasoning,
+        "llm_response": {"mock": True}
     }
-    async with httpx.AsyncClient() as client:
-        resp = await client.post(url, headers=headers, json=data)
-        resp.raise_for_status()
-        result = resp.json()
-        # Parse classification from LLM response (customize as needed)
-        content = result["choices"][0]["message"]["content"].lower()
-        if "toxic" in content:
-            classification = "toxic"
-        elif "spam" in content:
-            classification = "spam"
-        elif "harassment" in content:
-            classification = "harassment"
-        else:
-            classification = "safe"
-        return {
-            "classification": classification,
-            "confidence": 0.95,  # Placeholder
-            "reasoning": content,
-            "llm_response": result
-        }
 
+# --- Notification functions ---
 async def send_slack_notification(message: str):
-    if not SLACK_WEBHOOK_URL:
-        logging.warning("Slack webhook not configured.")
-        return False
-    async with httpx.AsyncClient() as client:
-        resp = await client.post(SLACK_WEBHOOK_URL, json={"text": message})
-        return resp.status_code == 200
+    logging.info(f"Slack notification: {message}")
+    return True
 
 async def send_email_notification(email: str, message: str):
-    # Placeholder for Brevo/SMTP integration
     logging.info(f"Email sent to {email}: {message}")
     return True
 
-@router.post("/api/v1/moderate/text", response_model=ModerationResponse)
+# --- Text Moderation Endpoint ---
+@router.post("/moderate/text", response_model=ModerationResponse)
 async def moderate_text(
     request: TextModerationRequest,
     background_tasks: BackgroundTasks,
@@ -71,7 +53,7 @@ async def moderate_text(
             created_at=datetime.utcnow()
         )
         db.add(moderation_req)
-        await db.flush()  # Get ID
+        await db.flush()
 
         result = await call_openai_moderation(request.text)
         moderation_res = models.ModerationResult(
@@ -85,7 +67,7 @@ async def moderate_text(
         moderation_req.status = "completed"
         await db.commit()
 
-        # Notification if inappropriate
+        # Send notifications if not safe
         if result["classification"] != "safe":
             msg = f"Inappropriate content detected for {request.email}: {result['classification']}"
             background_tasks.add_task(send_slack_notification, msg)
@@ -104,14 +86,14 @@ async def moderate_text(
         logging.error(f"Error in text moderation: {e}")
         raise HTTPException(status_code=500, detail="Moderation failed")
 
-@router.post("/api/v1/moderate/image", response_model=ModerationResponse)
+# --- Image Moderation Endpoint ---
+@router.post("/moderate/image", response_model=ModerationResponse)
 async def moderate_image(
     request: ImageModerationRequest,
     background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db)
 ):
     try:
-        # Placeholder: Replace with actual image moderation API
         content_hash = hashlib.sha256(request.image_data.encode()).hexdigest()
         moderation_req = models.ModerationRequest(
             content_type="image",
@@ -122,12 +104,12 @@ async def moderate_image(
         db.add(moderation_req)
         await db.flush()
 
-        # Dummy logic: always safe
+        # Mock: all images safe
         result = {
             "classification": "safe",
             "confidence": 1.0,
             "reasoning": "Image moderation not implemented.",
-            "llm_response": {}
+            "llm_response": {"mock": True}
         }
         moderation_res = models.ModerationResult(
             request_id=moderation_req.id,
@@ -139,20 +121,6 @@ async def moderate_image(
         db.add(moderation_res)
         moderation_req.status = "completed"
         await db.commit()
-
-        # Notification if inappropriate
-        if result["classification"] != "safe":
-            msg = f"Inappropriate image detected for {request.email}: {result['classification']}"
-            background_tasks.add_task(send_slack_notification, msg)
-            background_tasks.add_task(send_email_notification, request.email, msg)
-            notif_log = models.NotificationLog(
-                request_id=moderation_req.id,
-                channel="slack/email",
-                status="sent",
-                sent_at=datetime.utcnow()
-            )
-            db.add(notif_log)
-            await db.commit()
 
         return ModerationResponse(**result)
     except Exception as e:
