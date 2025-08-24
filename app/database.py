@@ -13,7 +13,7 @@ DATABASE_URL = os.getenv("DATABASE_URL", "sqlite+aiosqlite:///./moderator.db")
 engine = create_async_engine(DATABASE_URL, echo=True, future=True)
 
 # Create async sessionmaker
-AsyncSessionLocal = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
+async_session_maker = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
 
 # Dependency for FastAPI endpoints
 async def get_db():

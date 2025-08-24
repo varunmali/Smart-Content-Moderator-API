@@ -7,13 +7,14 @@ import hashlib, logging, json
 from datetime import datetime
 
 router = APIRouter()
-SLACK_WEBHOOK_URL = None  # You can keep None if you don’t want Slack notifications
-EMAIL_API_KEY = None  # Keep None if email notifications not needed
+SLACK_WEBHOOK_URL = None  # You can configure later
+EMAIL_API_KEY = None      # You can configure later
 
 # --- MOCK LLM function ---
 async def call_openai_moderation(text: str):
     """
-    Mock AI moderation: Classifies text as 'safe' or 'toxic' based on simple keyword.
+    Mock AI moderation: Classifies text as 'safe' or 'toxic' based on simple keyword checks.
+    Replace this later with real OpenAI API if available.
     """
     if any(word in text.lower() for word in ["bad", "hate", "spam", "abuse"]):
         classification = "toxic"
@@ -21,6 +22,7 @@ async def call_openai_moderation(text: str):
     else:
         classification = "safe"
         reasoning = "No inappropriate content detected."
+
     return {
         "classification": classification,
         "confidence": 0.95,
@@ -45,6 +47,7 @@ async def moderate_text(
     db: AsyncSession = Depends(get_db)
 ):
     try:
+        # Save request in DB
         content_hash = hashlib.sha256(request.text.encode()).hexdigest()
         moderation_req = models.ModerationRequest(
             content_type="text",
@@ -55,7 +58,10 @@ async def moderate_text(
         db.add(moderation_req)
         await db.flush()
 
+        # Call mock moderation
         result = await call_openai_moderation(request.text)
+
+        # Save result in DB
         moderation_res = models.ModerationResult(
             request_id=moderation_req.id,
             classification=result["classification"],
@@ -72,6 +78,7 @@ async def moderate_text(
             msg = f"Inappropriate content detected for {request.email}: {result['classification']}"
             background_tasks.add_task(send_slack_notification, msg)
             background_tasks.add_task(send_email_notification, request.email, msg)
+
             notif_log = models.NotificationLog(
                 request_id=moderation_req.id,
                 channel="slack/email",
@@ -82,6 +89,7 @@ async def moderate_text(
             await db.commit()
 
         return ModerationResponse(**result)
+
     except Exception as e:
         logging.error(f"Error in text moderation: {e}")
         raise HTTPException(status_code=500, detail="Moderation failed")
@@ -94,6 +102,7 @@ async def moderate_image(
     db: AsyncSession = Depends(get_db)
 ):
     try:
+        # Save request in DB
         content_hash = hashlib.sha256(request.image_data.encode()).hexdigest()
         moderation_req = models.ModerationRequest(
             content_type="image",
@@ -104,13 +113,15 @@ async def moderate_image(
         db.add(moderation_req)
         await db.flush()
 
-        # Mock: all images safe
+        # Mock: all images are safe
         result = {
             "classification": "safe",
             "confidence": 1.0,
-            "reasoning": "Image moderation not implemented.",
+            "reasoning": "Image moderation not implemented (mock).",
             "llm_response": {"mock": True}
         }
+
+        # Save result in DB
         moderation_res = models.ModerationResult(
             request_id=moderation_req.id,
             classification=result["classification"],
@@ -123,6 +134,7 @@ async def moderate_image(
         await db.commit()
 
         return ModerationResponse(**result)
+
     except Exception as e:
         logging.error(f"Error in image moderation: {e}")
         raise HTTPException(status_code=500, detail="Image moderation failed")
