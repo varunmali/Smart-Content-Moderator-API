@@ -1,14 +1,18 @@
-from pydantic import BaseModel, EmailStr
+"""
+Pydantic schemas for Smart Content Moderator API.
+"""
+
+from pydantic import BaseModel, EmailStr, Field
 from typing import Optional, Any
 from datetime import datetime
 
 class TextModerationRequest(BaseModel):
     email: EmailStr
-    text: str
+    text: str = Field(..., description="Text to be moderated")
 
 class ImageModerationRequest(BaseModel):
     email: EmailStr
-    image_data: str  # base64 encoded
+    image_data: str = Field(..., description="Base64-encoded image data")
 
 class ModerationResponse(BaseModel):
     classification: str
