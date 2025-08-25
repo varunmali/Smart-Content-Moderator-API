@@ -13,7 +13,9 @@ SLACK_WEBHOOK_URL = os.getenv("SLACK_WEBHOOK_URL")
 EMAIL_API_KEY = os.getenv("EMAIL_API_KEY")
 EMAIL_SENDER = os.getenv("EMAIL_SENDER")
 
-# --- MOCK LLM function ---
+# --------------------
+# Mock LLM moderation
+# --------------------
 async def call_openai_moderation(text: str):
     if any(word in text.lower() for word in ["bad", "hate", "spam", "abuse"]):
         classification = "toxic"
@@ -29,7 +31,9 @@ async def call_openai_moderation(text: str):
         "llm_response": {"mock": True}
     }
 
-# --- Notification functions ---
+# --------------------
+# Notification helpers
+# --------------------
 async def send_slack_notification(message: str):
     if not SLACK_WEBHOOK_URL:
         logging.warning("SLACK_WEBHOOK_URL not configured. Skipping Slack notification.")
@@ -67,8 +71,37 @@ async def send_email_notification(to_email: str, message: str):
     logging.info(f"Email sent to {to_email}: {message}")
     return True
 
-# --- Text Moderation Endpoint ---
-@router.post("/moderate/text", response_model=ModerationResponse)
+# --------------------
+# Notification processor
+# --------------------
+async def process_notifications(request_id: int, email: str, message: str):
+    slack_ok = await send_slack_notification(message)
+    email_ok = await send_email_notification(email, message)
+    status = "sent" if slack_ok and email_ok else "failed"
+
+    # Log in database
+    async with AsyncSessionLocal() as db:
+        notif_log = models.NotificationLog(
+            request_id=request_id,
+            channel="slack/email",
+            status=status,
+            sent_at=datetime.utcnow()
+        )
+        db.add(notif_log)
+
+        # Update summary notification_status
+        await db.execute(
+            models.ModerationSummary.__table__.update()
+            .where(models.ModerationSummary.request_id == request_id)
+            .values(notification_status=status)
+        )
+
+        await db.commit()
+
+# --------------------
+# Text moderation endpoint
+# --------------------
+@router.post("/text", response_model=ModerationResponse)
 async def moderate_text(
     request: TextModerationRequest,
     background_tasks: BackgroundTasks,
@@ -96,10 +129,8 @@ async def moderate_text(
         )
         db.add(moderation_res)
 
-        # Update request status to completed
         moderation_req.status = "completed"
 
-        # --- Insert into summary table ---
         summary_entry = models.ModerationSummary(
             request_id=moderation_req.id,
             text=request.text,
@@ -109,26 +140,12 @@ async def moderate_text(
             created_at=datetime.utcnow()
         )
         db.add(summary_entry)
-
         await db.commit()
 
-        # Send notifications if content is not safe
+        # If inappropriate, trigger notifications
         if result["classification"] != "safe":
             msg = f"Inappropriate content detected for {request.email}: {result['classification']}"
-            background_tasks.add_task(send_slack_notification, msg)
-            background_tasks.add_task(send_email_notification, request.email, msg)
-
-            notif_log = models.NotificationLog(
-                request_id=moderation_req.id,
-                channel="slack/email",
-                status="sent",
-                sent_at=datetime.utcnow()
-            )
-            db.add(notif_log)
-
-            # update summary notification status
-            summary_entry.notification_status = "sent"
-            await db.commit()  # <-- commit both notif_log + summary update
+            background_tasks.add_task(process_notifications, moderation_req.id, request.email, msg)
 
         return ModerationResponse(**result)
 
@@ -136,8 +153,10 @@ async def moderate_text(
         logging.error(f"Error in text moderation: {e}")
         raise HTTPException(status_code=500, detail="Moderation failed")
 
-# --- Image Moderation Endpoint ---
-@router.post("/moderate/image", response_model=ModerationResponse)
+# --------------------
+# Image moderation endpoint
+# --------------------
+@router.post("/image", response_model=ModerationResponse)
 async def moderate_image(
     request: ImageModerationRequest,
     background_tasks: BackgroundTasks,
@@ -154,7 +173,7 @@ async def moderate_image(
         db.add(moderation_req)
         await db.flush()
 
-        # Mock: all images are safe
+        # Mock image moderation
         result = {
             "classification": "safe",
             "confidence": 1.0,
@@ -172,19 +191,22 @@ async def moderate_image(
         db.add(moderation_res)
         moderation_req.status = "completed"
 
-        # --- Insert into summary table ---
-        notification_status = "not_required" if result["classification"] == "safe" else "pending"
+        notif_status = "not_required" if result["classification"] == "safe" else "pending"
         summary_entry = models.ModerationSummary(
             request_id=moderation_req.id,
             text="[image_data]",
             classification=result["classification"],
             confidence=result["confidence"],
-            notification_status=notification_status,
+            notification_status=notif_status,
             created_at=datetime.utcnow()
         )
         db.add(summary_entry)
-
         await db.commit()
+
+        # If inappropriate, trigger notifications
+        if result["classification"] != "safe":
+            msg = f"Inappropriate image detected for {request.email}"
+            background_tasks.add_task(process_notifications, moderation_req.id, request.email, msg)
 
         return ModerationResponse(**result)
 

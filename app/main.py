@@ -37,12 +37,16 @@ app.include_router(analytics_router, prefix="/api/v1", tags=["Analytics"])
 
 @app.on_event("startup")
 async def startup():
-    logging.info("Starting up Smart Content Moderator API...")
-    await init_db()
+    logging.info("🚀 Starting up Smart Content Moderator API...")
+    try:
+        await init_db()
+        logging.info("✅ Database initialized successfully.")
+    except Exception as e:
+        logging.error(f"❌ Database initialization failed: {e}")
 
 @app.on_event("shutdown")
 async def shutdown():
-    logging.info("Shutting down Smart Content Moderator API...")
+    logging.info("🛑 Shutting down Smart Content Moderator API...")
 
 @app.get("/")
 async def root():
