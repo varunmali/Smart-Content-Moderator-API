@@ -4,16 +4,20 @@ Async SQLAlchemy database setup for FastAPI.
 
 import os
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
-from sqlalchemy.orm import sessionmaker
 from app.models import Base
 
+# Database URL from environment or default SQLite
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite+aiosqlite:///./moderator.db")
 
 # Create async engine
 engine = create_async_engine(DATABASE_URL, echo=True, future=True)
 
-# Create async sessionmaker
-async_session_maker = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
+# Create async sessionmaker (common convention)
+AsyncSessionLocal = async_sessionmaker(
+    bind=engine,
+    expire_on_commit=False,
+    class_=AsyncSession
+)
 
 # Dependency for FastAPI endpoints
 async def get_db():

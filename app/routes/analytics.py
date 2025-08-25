@@ -9,32 +9,39 @@ router = APIRouter()
 
 @router.get("/api/v1/analytics/summary", response_model=AnalyticsSummaryResponse)
 async def analytics_summary(
-    user: str = Query(..., description="User email"),
     db: AsyncSession = Depends(get_db)
 ):
     try:
-        # Get requests for this user
-        stmt = select(models.ModerationRequest).where(models.ModerationRequest.user_email == user)
-        requests = (await db.execute(stmt)).scalars().all()
-        total_requests = len(requests)
+        # Total moderation requests
+        stmt_total = select(func.count()).select_from(models.ModerationRequest)
+        total_requests = (await db.execute(stmt_total)).scalar_one()
 
-        # Get classification counts for this user
-        stmt = (
+        # Count of classifications
+        stmt_class = (
             select(models.ModerationResult.classification, func.count())
-            .join(models.ModerationRequest, models.ModerationResult.request_id == models.ModerationRequest.id)
-            .where(models.ModerationRequest.user_email == user)
             .group_by(models.ModerationResult.classification)
         )
-        results = (await db.execute(stmt)).all()
+        results = (await db.execute(stmt_class)).all()
         counts = {r[0]: r[1] for r in results}
 
-        # Last request
-        last_request = max([r.created_at for r in requests], default=None)
+        # Count of notifications by status
+        stmt_notif = (
+            select(models.NotificationLog.status, func.count())
+            .group_by(models.NotificationLog.status)
+        )
+        notif_counts = (await db.execute(stmt_notif)).all()
+        notif_status = {r[0]: r[1] for r in notif_counts}
+
+        # Last request timestamp
+        stmt_last = select(func.max(models.ModerationRequest.created_at))
+        last_request = (await db.execute(stmt_last)).scalar_one()
 
         return AnalyticsSummaryResponse(
             total_requests=total_requests,
             inappropriate_count=counts.get("toxic", 0) + counts.get("spam", 0) + counts.get("harassment", 0),
-            last_request=last_request
+            last_request=last_request,
+            notifications_status=notif_status
         )
-    except Exception:
-        raise HTTPException(status_code=500, detail="Analytics query failed")
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Analytics query failed: {e}")

@@ -3,7 +3,7 @@ SQLAlchemy models for Smart Content Moderator API.
 Async setup and relationships included.
 """
 
-from sqlalchemy import Column, Integer, String, DateTime, Float, ForeignKey, Text
+from sqlalchemy import Column, Integer, String, DateTime, Float, ForeignKey, Text, func
 from sqlalchemy.orm import relationship, declarative_base
 from sqlalchemy.ext.asyncio import AsyncAttrs
 from datetime import datetime
@@ -38,3 +38,13 @@ class NotificationLog(Base):
     status = Column(String, nullable=False)   # "sent" or "failed"
     sent_at = Column(DateTime, default=datetime.utcnow)
     request = relationship("ModerationRequest", back_populates="notifications")
+
+class ModerationSummary(Base):
+    __tablename__ = "moderation_summary"
+    id = Column(Integer, primary_key=True, index=True)
+    request_id = Column(Integer, nullable=False)   # link to ModerationRequest
+    text = Column(String, nullable=False)
+    classification = Column(String, nullable=True)
+    confidence = Column(Float, nullable=True)
+    notification_status = Column(String, default="pending")
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
